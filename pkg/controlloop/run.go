@@ -2,6 +2,7 @@ package controlloop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"k8s.io/client-go/util/workqueue"
 	"sync"
@@ -12,28 +13,30 @@ import (
 const defaultReconcileTime = time.Second * 30
 const errorReconcileTime = time.Second * 5
 
-type ControlLoop struct {
-	r           Reconcile
-	object      ResourceObject
+type ControlLoop[T ResourceObject[T]] struct {
+	r           Reconcile[T]
 	stopChannel chan struct{}
 	exitChannel chan struct{}
 	l           Logger
-	Queue       *Queue[ResourceObject]
 	concurrency int
+	Storage     Storage[T]
+	Queue       *Queue[T]
 }
 
-func New(r Reconcile, options ...ClOption) *ControlLoop {
+func New[T ResourceObject[T]](r Reconcile[T], options ...ClOption) *ControlLoop[T] {
 	currentOptions := &opts{}
 	for _, o := range options {
 		o(currentOptions)
 	}
-	typedRateLimitingQueueConfig := workqueue.TypedRateLimitingQueueConfig[ResourceObject]{}
-	typedRateLimitingQueueConfig.DelayingQueue = workqueue.NewTypedDelayingQueue[ResourceObject]()
-	controlLoop := &ControlLoop{
+	typedRateLimitingQueueConfig := workqueue.TypedRateLimitingQueueConfig[ObjectKey]{}
+	typedRateLimitingQueueConfig.DelayingQueue = workqueue.NewTypedDelayingQueue[ObjectKey]()
+	queue := NewQueue[T]()
+	controlLoop := &ControlLoop[T]{
 		r:           r,
 		stopChannel: make(chan struct{}),
 		exitChannel: make(chan struct{}),
-		Queue:       NewQueue(),
+		Storage:     NewMemoryStorage[T](queue),
+		Queue:       queue,
 	}
 
 	if currentOptions.logger != nil {
@@ -50,7 +53,7 @@ func New(r Reconcile, options ...ClOption) *ControlLoop {
 	return controlLoop
 }
 
-func (cl *ControlLoop) Run() {
+func (cl *ControlLoop[T]) Run() {
 	stopping := atomic.Bool{}
 	stopping.Store(false)
 
@@ -73,13 +76,25 @@ func (cl *ControlLoop) Run() {
 		r := cl.r
 		ctx := context.Background()
 		for {
-			object, exit := cl.Queue.get()
+
+			object, exit, err := cl.Storage.getLast()
 			if exit {
 				return
 			}
+			if err != nil {
+				// object already deleted
+				if errors.Is(err, KetNotExist) {
+					continue
+				}
+			}
 
-			if stopping.Load() {
+			if stopping.Load() && object.GetKillTimestamp() == "" {
 				object.SetKillTimestamp(time.Now())
+				err := cl.Storage.Update(object)
+				if errors.Is(err, AlreadyUpdated) {
+					cl.Queue.queue.Add(object.GetName())
+				}
+				continue
 			}
 
 			result, err := cl.reconcile(ctx, r, object)
@@ -115,12 +130,12 @@ func (cl *ControlLoop) Run() {
 	}
 }
 
-func (cl *ControlLoop) Stop() {
+func (cl *ControlLoop[T]) Stop() {
 	cl.stopChannel <- struct{}{}
 	<-cl.exitChannel
 }
 
-func (cl *ControlLoop) reconcile(ctx context.Context, r Reconcile, object ResourceObject) (Result, error) {
+func (cl *ControlLoop[T]) reconcile(ctx context.Context, r Reconcile[T], object T) (Result, error) {
 	defer func() {
 		if r := recover(); r != nil {
 			cl.l.Error(fmt.Errorf("Recovered from panic: %v ", r))

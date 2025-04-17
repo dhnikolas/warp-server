@@ -10,15 +10,19 @@ type Result struct {
 	Requeue      bool
 }
 
-type ResourceObject interface {
+type ResourceObject[T any] interface {
 	GetConditions() []Condition
 	GetCondition(name string) (Condition, bool)
+	GetGeneration() int64
+	IncGeneration()
 	SetKillTimestamp(time time.Time)
-	KillTimestamp() string
+	GetKillTimestamp() string
 	SetDeletionTimestamp(time.Time)
-	DeletionTimestamp() string
+	GetDeletionTimestamp() string
+	GetName() ObjectKey
+	DeepCopy() T
 }
 
-type Reconcile interface {
-	Reconcile(context.Context, ResourceObject) (Result, error)
+type Reconcile[T ResourceObject[T]] interface {
+	Reconcile(context.Context, T) (Result, error)
 }

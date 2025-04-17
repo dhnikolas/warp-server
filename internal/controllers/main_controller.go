@@ -34,17 +34,14 @@ type MainReconcile struct {
 	tunnelService  *tunnel.Service
 }
 
-func (r *MainReconcile) Reconcile(ctx context.Context, object cl.ResourceObject) (cl.Result, error) {
-	config, ok := object.(*api.MainConfig)
-	if !ok {
-		panic("not cast object to MainConfig error")
-	}
+func (r *MainReconcile) Reconcile(ctx context.Context, object *api.MainConfig) (cl.Result, error) {
+	config := object
 
 	defer func() {
 		r.conditionsChan <- config.GetConditions()
 	}()
 
-	if config.KillTimestamp() != "" {
+	if config.GetKillTimestamp() != "" {
 		return r.reconcileKill(ctx, config)
 	}
 

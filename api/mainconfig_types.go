@@ -1,6 +1,8 @@
 package api
 
-import cl "warp-server/pkg/controlloop"
+import (
+	cl "warp-server/pkg/controlloop"
+)
 
 const (
 	VPNConnectedCondition     = "VPNConnected"
@@ -25,3 +27,8 @@ type MainConfig struct {
 }
 
 type MainConfigSpec struct{}
+
+// todo generate
+func (c *MainConfig) DeepCopy() *MainConfig {
+	return cl.DeepCopyStruct(c).(*MainConfig)
+}

@@ -1,17 +1,18 @@
 package controlloop
 
 import (
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
+type ObjectKey = string
+
 type Resource struct {
-	conditions        []Condition
-	m                 *sync.RWMutex
-	killTimestamp     string
-	killMutex         *sync.Mutex
-	deletionMutex     *sync.Mutex
-	deletionTimestamp string
+	Conditions        []Condition
+	KillTimestamp     string
+	DeletionTimestamp string
+	Generation        int64
+	Name              ObjectKey
 }
 
 type Condition struct {
@@ -21,47 +22,39 @@ type Condition struct {
 	Message string
 }
 
-func NewResource() *Resource {
-	return &Resource{m: &sync.RWMutex{}, killMutex: &sync.Mutex{}}
+func NewResource(name ObjectKey) *Resource {
+	return &Resource{Name: name}
 }
 
 func (r *Resource) SetKillTimestamp(time time.Time) {
-	if r.killMutex == nil {
-		return
-	}
-	r.killMutex.Lock()
-	defer r.killMutex.Unlock()
-	if r.killTimestamp == "" {
-		r.killTimestamp = time.Format("2006-01-02 15:04:05")
+	if r.KillTimestamp == "" {
+		r.KillTimestamp = time.Format("2006-01-02 15:04:05")
 	}
 }
 
-func (r *Resource) KillTimestamp() string {
-	r.killMutex.Lock()
-	defer r.killMutex.Unlock()
-	return r.killTimestamp
+func (r *Resource) GetKillTimestamp() string {
+	return r.KillTimestamp
 }
 
 func (r *Resource) SetDeletionTimestamp(time time.Time) {
-	if r.deletionMutex == nil {
-		return
-	}
-	r.deletionMutex.Lock()
-	defer r.deletionMutex.Unlock()
-	if r.deletionTimestamp == "" {
-		r.deletionTimestamp = time.Format("2006-01-02 15:04:05")
+	if r.DeletionTimestamp == "" {
+		r.DeletionTimestamp = time.Format("2006-01-02 15:04:05")
 	}
 }
 
-func (r *Resource) DeletionTimestamp() string {
-	r.deletionMutex.Lock()
-	defer r.deletionMutex.Unlock()
-	return r.deletionTimestamp
+func (r *Resource) GetDeletionTimestamp() string {
+	return r.DeletionTimestamp
+}
+
+func (r *Resource) IncGeneration() {
+	atomic.AddInt64(&r.Generation, 1)
+}
+
+func (r *Resource) GetGeneration() int64 {
+	return atomic.LoadInt64(&r.Generation)
 }
 
 func (r *Resource) setCondition(name, status, reason, message string) {
-	r.m.Lock()
-	defer r.m.Unlock()
 	exist := func(slice []Condition, name string) bool {
 		for _, item := range slice {
 			if item.Type == name {
@@ -70,23 +63,25 @@ func (r *Resource) setCondition(name, status, reason, message string) {
 		}
 		return false
 	}
-	if exist(r.conditions, name) {
-		for i := range r.conditions {
-			if r.conditions[i].Type == name {
-				r.conditions[i].Reason = reason
-				r.conditions[i].Message = message
-				r.conditions[i].Status = status
+	if exist(r.Conditions, name) {
+		for i := range r.Conditions {
+			if r.Conditions[i].Type == name {
+				r.Conditions[i].Reason = reason
+				r.Conditions[i].Message = message
+				r.Conditions[i].Status = status
 			}
 		}
 		return
 	}
-	r.conditions = append(r.conditions, Condition{Type: name, Status: status, Reason: reason, Message: message})
+	r.Conditions = append(r.Conditions, Condition{Type: name, Status: status, Reason: reason, Message: message})
 }
 
 func (r *Resource) GetConditions() []Condition {
-	r.m.RLock()
-	defer r.m.RUnlock()
-	return r.conditions
+	return r.Conditions
+}
+
+func (r *Resource) GetName() ObjectKey {
+	return r.Name
 }
 
 func (r *Resource) GetCondition(name string) (Condition, bool) {
