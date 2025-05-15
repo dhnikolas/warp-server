@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 	"warp-server/api"
+	"warp-server/internal/config"
 	"warp-server/internal/dto"
 	"warp-server/internal/services/fw"
 	"warp-server/internal/services/tunnel"
@@ -13,13 +14,14 @@ import (
 )
 
 func NewMainReconcile(
+	cfg *config.Config,
 	conditionsChan chan []cl.Condition,
 	vpnService *vpn.Service,
 	fwService *fw.Service,
 	tunnelService *tunnel.Service,
-
 ) *MainReconcile {
 	return &MainReconcile{
+		cfg:            cfg,
 		conditionsChan: conditionsChan,
 		vpnService:     vpnService,
 		fwService:      fwService,
@@ -28,6 +30,7 @@ func NewMainReconcile(
 }
 
 type MainReconcile struct {
+	cfg            *config.Config
 	conditionsChan chan []cl.Condition
 	vpnService     *vpn.Service
 	fwService      *fw.Service
@@ -35,7 +38,7 @@ type MainReconcile struct {
 }
 
 func (r *MainReconcile) Reconcile(ctx context.Context, object *api.MainConfig) (cl.Result, error) {
-	config := object
+	config := object // TODO: rename? Variable 'config' collides with imported package name
 
 	defer func() {
 		r.conditionsChan <- config.GetConditions()
@@ -65,20 +68,26 @@ func (r *MainReconcile) reconcileNormal(ctx context.Context, mc *api.MainConfig)
 		return cl.Result{RequeueAfter: time.Second}, nil
 	}
 	mc.MarkTrue(api.VPNConnectedCondition)
+	if r.cfg.VpnOnly {
+		// imitate success condition
+		mc.MarkTrue(api.PFDisabledCondition)
+		mc.MarkTrue(api.SSHKeysInstalledCondition)
+		mc.MarkTrue(api.TunnelEnabledCondition)
+
+		return cl.Result{RequeueAfter: time.Second * 20}, nil
+	}
 	err = r.fwService.Disable()
 	if err != nil {
 		mc.MarkFalse(api.PFDisabledCondition, api.PFDisabledFailedReason, err.Error())
 		return cl.Result{}, err
 	}
 	mc.MarkTrue(api.PFDisabledCondition)
-
 	err = r.tunnelService.SetupSSHKey()
 	if err != nil {
 		mc.MarkFalse(api.SSHKeysInstalledCondition, api.SSHKeysFailedReason, err.Error())
 		return cl.Result{}, err
 	}
 	mc.MarkTrue(api.SSHKeysInstalledCondition)
-
 	err = r.tunnelService.StartTunnel()
 	if err != nil {
 		log.Info().Err(err)
