@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/getlantern/systray"
 	"github.com/jroimartin/gocui"
 	"os"
 	"os/signal"
@@ -62,6 +63,7 @@ func main() {
 	conditionChannel := make(chan []cl.Condition, 100)
 
 	mainController := controllers.NewMainReconcile(
+		cfg,
 		conditionChannel,
 		vpnService,
 		fwService,
@@ -77,18 +79,23 @@ func main() {
 
 	ctxExit, cancel := context.WithCancel(context.Background())
 
-	g, err := gocui.NewGui(gocui.Output256)
-	if err != nil {
-		panic(fmt.Errorf("Error loading gui: %s ", err))
-	}
-	go func() {
-		defer cancel()
+	var g *gocui.Gui = nil
 
-		err := ui.CreateTUI(cancel, g, l, conditionChannel)
+	if !cfg.DaemonMode {
+		g, err = gocui.NewGui(gocui.Output256)
 		if err != nil {
-			fmt.Println("CreateTUI error:", err)
+			panic(fmt.Errorf("Error loading gui: %s ", err))
 		}
-	}()
+		go func() {
+			defer cancel()
+
+			err := ui.CreateTUI(cancel, g, l, conditionChannel)
+			if err != nil {
+				log.Error().Msgf("Main", "CreateTUI error: %s", err.Error())
+			}
+		}()
+		defer g.Close()
+	}
 
 	go func() {
 		defer cancel()
@@ -96,14 +103,38 @@ func main() {
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
 	}()
+
 	log.Info().Msg("Main", "Warp-server started!")
-	<-ctxExit.Done()
 
-	log.Info().Msg("Main", "Stopping warp-server...")
-	mainLoop.Stop()
-	log.Info().Msg("Main", "warp-server stopped")
-	time.Sleep(time.Second * 2)
-	g.Close()
+	onExit := func() {
+		log.Info().Msg("Main", "Stopping warp-server...")
+		mainLoop.Stop()
+		time.Sleep(time.Second * 1)
+		log.Info().Msg("Main", "warp-server stopped")
 
-	fmt.Println("Application stopped")
+		//g.Close()
+		time.Sleep(time.Second * 1)
+		log.Info().Msg("Main", "Application stopped")
+	}
+
+	onReady := func() {
+		systray.SetTitle("☑️")
+		systray.SetTooltip("Lantern")
+		mQuitOrig := systray.AddMenuItem("Stop", "Stop the WaRp/Server")
+		go func() {
+			select {
+			case <-mQuitOrig.ClickedCh:
+				log.Info().Msg("Main", "Requesting quit...")
+				systray.Quit()
+				log.Info().Msg("Main", "Finished quitting")
+
+			case <-ctxExit.Done():
+				log.Info().Msg("Main", "Requesting quit...")
+				systray.Quit()
+				log.Info().Msg("Main", "Finished quitting")
+			}
+		}()
+	}
+
+	systray.Run(onReady, onExit)
 }

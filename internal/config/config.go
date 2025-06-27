@@ -15,6 +15,8 @@ type Config struct {
 	LocalPassword string `validate:"required" yaml:"local_password"`
 	LocalHost     string `validate:"required" yaml:"localhost"`
 	TunnelAddress string `validate:"required" yaml:"tunnel_address"`
+	DaemonMode    bool   `validate:"omitempty" yaml:"daemon_mode"`
+	VpnOnly       bool   `validate:"omitempty" yaml:"vpn_only"`
 }
 
 func LoadConfig() (*Config, error) {
